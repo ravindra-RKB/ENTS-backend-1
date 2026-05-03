@@ -20,49 +20,72 @@ def stream_csv(self, request_args):
     Arguments:
     request_args -- arguments of the request being made
     """
-    v_args = get_cell_data.load(request_args)
-    cell_ids = v_args["cellIds"].split(",")
-    for cell_id in cell_ids:
-        teros_data = pd.DataFrame(
-            TEROSData.get_teros_data_obj(
-                cell_id,
-                resample=v_args["resample"],
-                start_time=v_args["startTime"],
-                end_time=v_args["endTime"],
-            )
-        )
-        power_data = pd.DataFrame(
-            PowerData.get_power_data_obj(
-                cell_id,
-                resample=v_args["resample"],
-                start_time=v_args["startTime"],
-                end_time=v_args["endTime"],
-            )
-        )
-        sensor_data = pd.DataFrame(
-            Sensor.get_sensor_data_obj(
-                name="phytos31",
-                cell_id=cell_id,
-                measurement="voltage",
-                resample=v_args["resample"],
-                start_time=v_args["startTime"],
-                end_time=v_args["endTime"],
-            )
-        )
-        data_frames = [teros_data, power_data, sensor_data]
+    try:
+        v_args = get_cell_data.load(request_args)
+        cell_ids = v_args["cellIds"].split(",")
+        all_frames = []
 
-        df_merged = reduce(
-            lambda left, right: pd.merge(left, right, on=["timestamp"], how="outer"),
-            data_frames,
-        ).fillna("void")
+        for cell_id in cell_ids:
+            teros_data = pd.DataFrame(
+                TEROSData.get_teros_data_obj(
+                    cell_id,
+                    resample=v_args["resample"],
+                    start_time=v_args["startTime"],
+                    end_time=v_args["endTime"],
+                )
+            )
+            power_data = pd.DataFrame(
+                PowerData.get_power_data_obj(
+                    cell_id,
+                    resample=v_args["resample"],
+                    start_time=v_args["startTime"],
+                    end_time=v_args["endTime"],
+                )
+            )
+            sensor_data = pd.DataFrame(
+                Sensor.get_sensor_data_obj(
+                    name="phytos31",
+                    cell_id=cell_id,
+                    measurement="voltage",
+                    resample=v_args["resample"],
+                    start_time=v_args["startTime"],
+                    end_time=v_args["endTime"],
+                )
+            )
+            data_frames = [df for df in [teros_data, power_data, sensor_data] if not df.empty]
+
+            if not data_frames:
+                continue
+
+            df_merged = reduce(
+                lambda left, right: pd.merge(left, right, on=["timestamp"], how="outer"),
+                data_frames,
+            ).fillna("")
+
+            all_frames.append(df_merged)
+
+        if not all_frames:
+            return "timestamp\n"
+
+        df_final = pd.concat(all_frames, ignore_index=True)
+
+        # Ensure timestamp is the first column and sort by it
+        if "timestamp" in df_final.columns:
+            cols = ["timestamp"] + [c for c in df_final.columns if c != "timestamp"]
+            df_final = df_final[cols]
+            df_final = df_final.sort_values("timestamp").reset_index(drop=True)
 
         csv_buffer = StringIO()
 
         # buffer writes to memory
-        for chunk in np.array_split(df_merged, 10):
+        for chunk in np.array_split(df_final, max(1, len(df_final) // 1000 + 1)):
             chunk.to_csv(csv_buffer, index=False, header=(csv_buffer.tell() == 0))
 
         return csv_buffer.getvalue()
+
+    except Exception as e:
+        # Return error info so the Status endpoint can relay it
+        raise self.retry(exc=e, max_retries=0)
 
 
 class Cell_Data(Resource):
