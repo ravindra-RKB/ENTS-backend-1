@@ -39,7 +39,7 @@ export default defineConfig(({ mode }) => {
           },
         },
       },
-      outDir: 'build',
+      outDir: 'dist',
     },
     esbuild: {
       pure: mode === 'production' ? ['console.log'] : [],
